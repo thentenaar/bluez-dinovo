@@ -13,15 +13,15 @@
  *               * Forked bluez git.                                              *
  *                                                                                *
  *     Notes:                                                                     *
- *		1) The i18n for the device isn't currently supported.                     *
- *			The way that the i18n works, is that when the device                  *
- *			connects, the Winblows app retrieves the respective                   *
- *			strings from the device and verifies/updates them.                    *
+ *		1) The i18n for the device isn't currently supported.             *
+ *			The way that the i18n works, is that when the device      *
+ *			connects, the Winblows app retrieves the respective       *
+ *			strings from the device and verifies/updates them.        *
  *                                                                                *
- *			Simple enough to do, but I'll worry about it later.                   *
- *		2) The '000' key actually sends 3 0's and is not a special key.           *
- *		3) The "Copy calulator result to clipboard" requires an                   *
- *		   activation packet that I haven't isolated to date.                     *
+ *			Simple enough to do, but I'll worry about it later.       *
+ *		2) The '000' key actually sends 3 0's and is not a special key.   *
+ *		3) The "Copy calulator result to clipboard" requires an           *
+ *		   activation packet that I haven't isolated to date.             *
  *      4) Git-R-Done!                                                            *
  **********************************************************************************/
 
