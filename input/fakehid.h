@@ -27,6 +27,7 @@ struct fake_input;
 struct fake_hid {
 	uint16_t vendor;
 	uint16_t product;
+	void *priv;
 	gboolean (*connect) (struct fake_input *fake_input, GError **err);
 	int (*disconnect) (struct fake_input *fake_input);
 	gboolean (*event) (GIOChannel *chan, GIOCondition cond, gpointer data);
