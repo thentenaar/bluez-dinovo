@@ -48,6 +48,10 @@
 #include "fakehid.h"
 #include "uinput.h"
 
+/* Forward declarations for the Logitech DiNovo Mediapad */
+int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hid *fake_hid);
+gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer data);
+
 #define PS3_FLAGS_MASK 0xFFFFFF00
 
 enum ps3remote_special_keys {
@@ -350,6 +354,16 @@ static struct fake_hid fake_hid_table[] = {
 		.setup_uinput	= ps3remote_setup_uinput,
 	},
 
+	/* Logitech DiNovo Mediapad */
+	{
+		.vendor         = 0x046d,
+		.product	= 0xb3e3,
+		.connect	= fake_hid_common_connect,
+		.disconnect	= fake_hid_common_disconnect,
+		.event		= logitech_mediapad_event,
+		.setup_uinput	= logitech_mediapad_setup_uinput,
+	},
+
 	{ },
 };
 
@@ -373,12 +387,15 @@ struct fake_hid *get_fake_hid(uint16_t vendor, uint16_t product)
 int fake_hid_connadd(struct fake_input *fake, GIOChannel *intr_io,
 						struct fake_hid *fake_hid)
 {
+
+	fake->io = g_io_channel_ref(intr_io);
+
 	if (fake_hid->setup_uinput(fake, fake_hid)) {
 		error("Error setting up uinput");
+		g_io_channel_unref(fake->io);
 		return ENOMEM;
 	}
 
-	fake->io = g_io_channel_ref(intr_io);
 	g_io_channel_set_close_on_unref(fake->io, TRUE);
 	g_io_add_watch(fake->io, G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL,
 					(GIOFunc) fake_hid->event, fake);

@@ -26,7 +26,7 @@ include_HEADERS =
 if CONFIGFILES
 dbusdir = $(sysconfdir)/dbus-1/system.d
 
-dbus_DATA = src/bluetooth.conf
+dbus_DATA = src/bluetooth.conf input/dinovo.conf
 
 confdir = $(sysconfdir)/bluetooth
 
@@ -136,7 +136,8 @@ builtin_sources += input/main.c \
 			input/manager.h input/manager.c \
 			input/server.h input/server.c \
 			input/device.h input/device.c \
-			input/fakehid.c input/fakehid.h
+			input/fakehid.c input/fakehid.h \
+			input/logitech_mediapad.c
 endif
 
 if SERIALPLUGIN
