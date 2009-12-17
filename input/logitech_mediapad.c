@@ -753,7 +753,9 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 			return FALSE;
 		} 
 
+#if 0
 		info("dinovo: m %d: in: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);
+#endif
 
 		/* Translate/Inject keypresses */
 		if (buf[1] == 0x03) { /* Media keys */
