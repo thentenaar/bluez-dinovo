@@ -2,7 +2,7 @@
  *     (C) 2006-2009 Tim Hentenaar <tim@hentenaar.com>                            *
  *     Licensed under the GNU General Public License (v2).                        *
  *     For more information, see http://hentenaar.com                             *
- *                                                                                *                               
+ *                                                                                *
  *     12/17/09 thentenaar:                                                       *
  *               * Made simple DBus methods more generic.                         *
  *               * Added new DBus method: SetDisplayMode                          *
