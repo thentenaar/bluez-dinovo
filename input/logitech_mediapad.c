@@ -12,17 +12,6 @@
  *               * Ported mediapad driver up to master.                           *
  *               * Forked bluez git.                                              *
  *                                                                                *
- *     Notes:                                                                     *
- *		1) The i18n for the device isn't currently supported.             *
- *			The way that the i18n works, is that when the device      *
- *			connects, the Winblows app retrieves the respective       *
- *			strings from the device and verifies/updates them.        *
- *                                                                                *
- *			Simple enough to do, but I'll worry about it later.       *
- *		2) The '000' key actually sends 3 0's and is not a special key.   *
- *		3) The "Copy calulator result to clipboard" requires an           *
- *		   activation packet that I haven't isolated to date.             *
- *      4) Git-R-Done!                                                            *
  **********************************************************************************/
 
 #include <stdio.h>
@@ -230,11 +219,12 @@ static uint8_t translate_key(int mode, int key) {
 		switch (key & 0xff) {
 			case MP_KEY_MEDIA:   return mp_keymap_m[mode ? 1 : 0][0];
 			case MP_KEY_FFWD:    return mp_keymap_m[mode ? 1 : 0][1];
-			case MP_KEY_STOP:    return mp_keymap_m[mode ? 1 : 0][2];
-			case MP_KEY_PLAY:    return mp_keymap_m[mode ? 1 : 0][3];
-			case MP_KEY_MUTE:    return mp_keymap_m[mode ? 1 : 0][4];
-			case MP_KEY_VOLUP:   return mp_keymap_m[mode ? 1 : 0][5];
-			case MP_KEY_VOLDOWN: return mp_keymap_m[mode ? 1 : 0][6];
+			case MP_KEY_REW:     return mp_keymap_m[mode ? 1 : 0][2];
+			case MP_KEY_STOP:    return mp_keymap_m[mode ? 1 : 0][3];
+			case MP_KEY_PLAY:    return mp_keymap_m[mode ? 1 : 0][4];
+			case MP_KEY_MUTE:    return mp_keymap_m[mode ? 1 : 0][5];
+			case MP_KEY_VOLUP:   return mp_keymap_m[mode ? 1 : 0][6];
+			case MP_KEY_VOLDOWN: return mp_keymap_m[mode ? 1 : 0][7];
 		}
 	} 
 	
@@ -450,11 +440,12 @@ static DBusMessage *mp_dbus_bind_key(DBusConnection *conn, DBusMessage *msg, voi
 			switch (scancode) {
 				case MP_KEY_MEDIA:   mp_keymap_m[mode ? 1 : 0][0] = key; break;
 				case MP_KEY_FFWD:    mp_keymap_m[mode ? 1 : 0][1] = key; break;
-				case MP_KEY_STOP:    mp_keymap_m[mode ? 1 : 0][2] = key; break;
-				case MP_KEY_PLAY:    mp_keymap_m[mode ? 1 : 0][3] = key; break;
-				case MP_KEY_MUTE:    mp_keymap_m[mode ? 1 : 0][4] = key; break;
-				case MP_KEY_VOLUP:   mp_keymap_m[mode ? 1 : 0][5] = key; break;
-				case MP_KEY_VOLDOWN: mp_keymap_m[mode ? 1 : 0][6] = key; break;
+				case MP_KEY_REW:     mp_keymap_m[mode ? 1 : 0][2] = key; break;
+				case MP_KEY_STOP:    mp_keymap_m[mode ? 1 : 0][3] = key; break;
+				case MP_KEY_PLAY:    mp_keymap_m[mode ? 1 : 0][4] = key; break;
+				case MP_KEY_MUTE:    mp_keymap_m[mode ? 1 : 0][5] = key; break;
+				case MP_KEY_VOLUP:   mp_keymap_m[mode ? 1 : 0][6] = key; break;
+				case MP_KEY_VOLDOWN: mp_keymap_m[mode ? 1 : 0][7] = key; break;
 			}
 		} 
 	
@@ -740,7 +731,8 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 	fake_input->uinput = mp->uinput;
 
 	/* Set the mediapad clock */
-	sleep(3); mp_set_clock(mp->sock);
+	mp_set_clock(mp->sock);
+	mp_lcd_set_mode(mp->sock,LCD_SCREEN_CLOCK);
 	return 0;
 }
 
@@ -761,7 +753,7 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 			return FALSE;
 		} 
 
-		/*info("dinovo: m %d: in: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);*/
+		info("dinovo: m %d: in: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);
 
 		/* Translate/Inject keypresses */
 		if (buf[1] == 0x03) { /* Media keys */
@@ -797,7 +789,7 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 				break;
 				case MP_KEY_MUTE:
 					/* XXX: Is there some way to be notified if the audio is already muted on init? */
-					mp->prev_key = translate_key(mp->mode,KEY_MUTE);
+					mp->prev_key = translate_key(mp->mode,MP_KEY_MUTE);
 					mp->icons   ^= LCD_ICON_MUTE; 
 					inject_key(mp->uinput,mp->prev_key,1);
 					mp_lcd_set_indicator(isk,LCD_ICON_MUTE,(mp->icons & LCD_ICON_MUTE) ? 1 : 0);
