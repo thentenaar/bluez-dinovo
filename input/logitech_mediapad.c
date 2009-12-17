@@ -2,13 +2,18 @@
  *     (C) 2006-2009 Tim Hentenaar <tim@hentenaar.com>                            *
  *     Licensed under the GNU General Public License (v2).                        *
  *     For more information, see http://hentenaar.com                             *
+ *                                                                                *                                                                                
+ *     12/17/09 thentenaar:                                                       *
+ *               * Made simple DBus methods more generic.                         *
+ *               * Added new DBus method: SetDisplayMode                          *
+ *               * TODO: Add a DBus method to get the current keybindings.        *
  *                                                                                *
  *     12/16/09 thentenaar:                                                       *
- *               * Added new DBus method: BindKey.                                *
+ *               * Added new DBus methods: BindKey, SetScreenMode                 *
  *               * Added keymap tables, updated default keysyms.                  *
  *               * Massively cleaned up the code.                                 *
  *               * Integrated atomic ops from Glen Rolle's 3.36 patch.            *
- *               * Rewrote DBus code to use gdbus.                                *
+ *               * Rewrote DBus code.                                             *
  *               * Ported mediapad driver up to master.                           *
  *               * Forked bluez git.                                              *
  *                                                                                *
@@ -32,17 +37,17 @@
 #include "logging.h"
 
 /* Screen modes */
-#define LCD_SCREEN_TEXT   0x00
-#define LCD_SCREEN_CLOCK  0x01
+#define LCD_SCREEN_MODE_TEXT   0x00
+#define LCD_SCREEN_MODE_CLOCK  0x01
 
 /* Display modes */
 #define LCD_DISP_MODE_INIT    0x01 /* Initialize the line */
-#define LCD_DISP_MODE_BUF1    0x10 /* Display the first 16 chars of the line */
-#define LCD_DISP_MODE_BUF2    0x11 /* ... 2nd 16 */
-#define LCD_DISP_MODE_BUF3    0x12 /* ... 3rd 16 */
-#define LCD_DISP_MODE_SCROLL  0x20 /* Scroll char-by-char */
-#define LCD_DISP_MODE_SCROLL2 0x02 /* ... by 16-chars (or'd in) */
-#define LCD_DISP_MODE_SCROLL3 0x03 /* ... by 32-chars (or'd in) */
+#define LCD_DISP_MODE_BUF1    0x10 /* Display the first buffer on the line */
+#define LCD_DISP_MODE_BUF2    0x11 /* ... 2nd buffer */
+#define LCD_DISP_MODE_BUF3    0x12 /* ... 3rd buffer */
+#define LCD_DISP_MODE_SCROLL  0x20 /* Scroll by one buffer */
+#define LCD_DISP_MODE_SCROLL2 0x02 /* ... by 2 buffers */
+#define LCD_DISP_MODE_SCROLL3 0x03 /* ... by 3 buffers */
 
 /* Icons */
 #define LCD_ICON_EMAIL	0x01
@@ -60,6 +65,8 @@
 #define LCD_LOW_BEEP	0x01
 #define LCD_LONG_BEEP	0x02
 #define LCD_SHORT_BEEP	0x03
+#define LCD_LED_ON      0x01
+#define LCD_LED_OFF     0x02
 
 /* Keypad Modes */
 #define MODE_NUM		0x00
@@ -72,6 +79,28 @@
 /* Lengths */
 #define LCD_BUF_LEN		16
 #define LCD_LINE_LEN	(LCD_BUF_LEN*3)
+
+/* Media key scancodes */
+#define MP_KEY_MEDIA    0x83
+#define MP_KEY_FFWD		0xb5
+#define MP_KEY_REW		0xb6
+#define MP_KEY_STOP		0xb7
+#define MP_KEY_PLAY		0xcd
+#define MP_KEY_MUTE		0xe2
+#define MP_KEY_VOLUP	0xe9
+#define MP_KEY_VOLDOWN	0xea
+
+/* This is easier than including device.h, etc. */
+struct fake_input {
+	int		flags;
+	GIOChannel	*io;
+	int		uinput;		/* uinput socket */
+	int		rfcomm;		/* RFCOMM socket */
+	uint8_t		ch;		/* RFCOMM channel number */
+	gpointer connect;
+	gpointer disconnect;
+	void		*priv;
+};
 
 /* Mediapad State */
 struct mp_state {
@@ -94,7 +123,7 @@ struct mpcmd screen_mode = { /* 0 = text, 1 =  clock */
 	{ 0xA2, 0x10, 0x00, 0x80, 0x10, 0x00, 0x00, 0x00 }, 8
 };
 
-struct mpcmd screen_start = { /* Signals the start of a screen write operation */
+struct mpcmd screen_start = { /* Signals the start of a screen write operation (mode) */
 	{ 0xA2, 0x10, 0x00, 0x81, 0x10, 0x00, 0x00, 0x00 }, 8
 };
 
@@ -165,36 +194,14 @@ static uint8_t mp_keymap_m[2][8] = {
 	}
 };
 
-/* Media key scancodes */
-#define MP_KEY_MEDIA    0x83
-#define MP_KEY_FFWD		0xb5
-#define MP_KEY_REW		0xb6
-#define MP_KEY_STOP		0xb7
-#define MP_KEY_PLAY		0xcd
-#define MP_KEY_MUTE		0xe2
-#define MP_KEY_VOLUP	0xe9
-#define MP_KEY_VOLDOWN	0xea
-
 #define inject_key(X,Y,Z)         { send_event(X,EV_KEY,Y,Z); send_event(X,EV_SYN,SYN_REPORT,0); }
 #define do_write(X,Y,Z)           if (write(X,Y,Z)) {};
-#define mp_lcd_write_start(sock)  write_mpcmd(sock,screen_start)
-#define mp_lcd_write_finish(sock) write_mpcmd(sock,screen_finish)
+#define mp_lcd_write_start(sock)   write_mpcmd(sock,screen_start)
+#define mp_lcd_write_finish(sock)  write_mpcmd(sock,screen_finish)
 
 /* Forward declarations to satisfy warnings... */
 int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hid *fake_hid);
 gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer data);
-
-/* This is easier than including device.h, etc. */
-struct fake_input {
-	int		flags;
-	GIOChannel	*io;
-	int		uinput;		/* uinput socket */
-	int		rfcomm;		/* RFCOMM socket */
-	uint8_t		ch;		/* RFCOMM channel number */
-	gpointer connect;
-	gpointer disconnect;
-	void		*priv;
-};
 
 /**
  * Send a uinput event
@@ -244,7 +251,7 @@ static void write_mpcmd(int sock, struct mpcmd command) {
 /*
  * Set LCD mode
  */
-static void mp_lcd_set_mode(int sock, uint8_t mode) {
+static void mp_lcd_set_screen_mode(int sock, uint8_t mode) {
 	screen_mode.command[6] = (char)mode;
 	write_mpcmd(sock,screen_mode);
 }
@@ -272,12 +279,11 @@ static void mp_lcd_set_indicator(int sock, uint8_t indicator, uint8_t blink) {
 	write_mpcmd(sock,set_icons);
 }
 
-
 /**
  * Clear the screen
  */
 static void mp_lcd_clear(int sock) {
-	mp_lcd_set_mode(sock,LCD_SCREEN_CLOCK);
+	mp_lcd_set_screen_mode(sock,LCD_SCREEN_MODE_CLOCK);
 	mp_lcd_write_start(sock);
 	mp_lcd_set_indicator(sock,LCD_ICON_ALL,LCD_ICON_OFF);
 	mp_lcd_write_finish(sock);
@@ -289,6 +295,7 @@ static void mp_lcd_clear(int sock) {
 static void mp_blink_or_beep(int sock, uint8_t beep, uint8_t blink) {
 	int i = 0;
 
+	set_ledspk[1].command[5] = 0; set_ledspk[1].command[6] = 0;
 	if (beep)  set_ledspk[1].command[5] = (beep & 3);
 	if (blink) set_ledspk[1].command[6] = 1;
 	while (set_ledspk[i].len != 0) { write_mpcmd(sock,set_ledspk[i]); i++; }
@@ -317,8 +324,8 @@ static void mp_set_clock(int sock) {
  */
 static void mp_lcd_write_buffer(int sock, char *text, uint8_t bufno) {
 	if (!text || sock < 4 || bufno > 9) return;
-	set_text_buffer.command[4] = 0x20 + bufno - 1;
-	memcpy(&set_text_buffer.command+5,text,(strlen(text) > LCD_BUF_LEN) ? LCD_BUF_LEN : strlen(text));
+	set_text_buffer.command[4] = 0x20 + bufno;
+	memcpy(&set_text_buffer.command[5],text,(strlen(text) > LCD_BUF_LEN) ? LCD_BUF_LEN : strlen(text));
 	write_mpcmd(sock,set_text_buffer);
 }
 
@@ -345,7 +352,7 @@ static void mp_lcd_write_line(int sock, char *text, uint8_t lineno) {
 	/* Write the text */
 	mp_lcd_write_start(sock);
 	mp_lcd_set_display_mode(sock,LCD_DISP_MODE_INIT,LCD_DISP_MODE_INIT,LCD_DISP_MODE_INIT);
-	mp_lcd_write_start(sock);
+	mp_lcd_set_screen_mode(sock,LCD_SCREEN_MODE_TEXT);
 	for (i=0;i<3;i++) mp_lcd_write_buffer(sock,line+i*LCD_BUF_LEN,lineno*3+i);
 	mp_lcd_set_display_mode(sock,f,f,f);
 	mp_lcd_write_finish(sock);
@@ -369,54 +376,74 @@ static void mp_lcd_write_text(int sock, char *text) {
 	if (z > LCD_BUF_LEN*3) { 
 		f1 |= LCD_DISP_MODE_SCROLL | LCD_DISP_MODE_SCROLL2; 
 		f2 = f3 = f1;
-		if (z > LCD_BUF_LEN*6) { f1++; f2++; f3++; }
+		if (z >= LCD_BUF_LEN*6) { f1++; f2++; f3++; }
 	}
 
 	/* Write the text */
 	mp_lcd_write_start(sock);
 	mp_lcd_set_display_mode(sock,LCD_DISP_MODE_INIT,LCD_DISP_MODE_INIT,LCD_DISP_MODE_INIT);
-	mp_lcd_write_start(sock);
+	mp_lcd_set_screen_mode(sock,LCD_SCREEN_MODE_TEXT);
 	for (i=0;i<3;i++) {
-		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*i),i);
-		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*i+3),i+3);
-		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*i+6),i+6);
+		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*(i*3)),i);
+		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*(i*3+1)),i+3);
+		mp_lcd_write_buffer(sock,lines+(LCD_BUF_LEN*(i*3+2)),i+6);
 	}
 	mp_lcd_set_display_mode(sock,f1,f2,f3);
 	mp_lcd_write_finish(sock);
 }	
 
 /**************** DBus Methods *******************/
+typedef DBusMessage *(*MPDBusMethodFunction)(DBusMessage *msg, struct mp_state *mp, void *data);
 
-/* SetIndicator(indicator, blink) 
- *	[ indicator := see LCD_ICON_* above ]
- *	[ blink     := 0 (off) | 1 (on) | >= 2 (blink) ] 
- */ 
-static DBusMessage *mp_dbus_set_indicator(DBusConnection *conn, DBusMessage *msg, void *data) {
-	DBusError db_err; uint32_t indicator,blink;
-	struct mp_state *mp = (struct mp_state *)data;
+typedef struct {
+	const char *name;
+	const char *signature;
+	const char *reply;
+	MPDBusMethodFunction function;
+	GDBusMethodFlags flags;
+	void *proc;
+} MPDBusMethodTable;
 
-	if (!mp) return NULL;
+typedef void (*MPGenericProc)(int);
+typedef void (*MPGenericProc1u)(int,uint32_t);
+typedef void (*MPGenericProc2u)(int,uint32_t,uint32_t);
+typedef void (*MPGenericProc3u)(int,uint32_t,uint32_t,uint32_t);
+
+static DBusMessage *mp_dbus_generic_method(DBusMessage *msg, struct mp_state *mp, void *proc) {
+	if (!mp || !proc) return NULL;
+	((MPGenericProc)proc)(mp->sock);
+	return NULL;
+}
+
+static DBusMessage *mp_dbus_generic_1u_method(DBusMessage *msg, struct mp_state *mp, void *proc) {
+	DBusError db_err; uint32_t u1;
+
+	if (!mp || !proc) return NULL;
 	dbus_error_init(&db_err);
-	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&indicator,DBUS_TYPE_UINT32,&blink,DBUS_TYPE_INVALID);
-	if (dbus_error_is_set(&db_err)) error("logitech_mediapad: SetIndicator: unable to get args! (%s)",db_err.message);
-	else mp_lcd_set_indicator(mp->sock,indicator,blink);
+	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&u1,DBUS_TYPE_INVALID);
+	if (!dbus_error_is_set(&db_err)) ((MPGenericProc1u)(proc))(mp->sock,u1);
 	dbus_error_free(&db_err);
 	return NULL;
 }
 
-/* BlinkOrBeep(beep_type, blink)
- * 	[beep_type := 0 (none) | 1 (low beep) | 2 (beep-beep) | 3 (short beep) ] 
- *	[blink     := 0 (no)   | 1 (yes) ]
- */
-static DBusMessage *mp_dbus_blink_or_beep(DBusConnection *conn, DBusMessage *msg, void *data) {
-	DBusError db_err; uint32_t beep_type,blink;
-	struct mp_state *mp = (struct mp_state *)data;
+static DBusMessage *mp_dbus_generic_2u_method(DBusMessage *msg, struct mp_state *mp, void *proc) {
+	DBusError db_err; uint32_t u1,u2;
 
-	if (!mp) return NULL;
+	if (!mp || !proc) return NULL;
 	dbus_error_init(&db_err);
-	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&beep_type,DBUS_TYPE_UINT32,&blink,DBUS_TYPE_INVALID);
-	if (dbus_error_is_set(&db_err)) error("logitech_mediapad: BlinkOrBeep: unable to get args! (%s)",db_err.message);
-	else mp_blink_or_beep(mp->sock,beep_type,blink);
+	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&u1,DBUS_TYPE_UINT32,&u2,DBUS_TYPE_INVALID);
+	if (!dbus_error_is_set(&db_err)) ((MPGenericProc2u)(proc))(mp->sock,u1,u2);
+	dbus_error_free(&db_err);
+	return NULL;
+}
+
+static DBusMessage *mp_dbus_generic_3u_method(DBusMessage *msg, struct mp_state *mp, void *proc) {
+	DBusError db_err; uint32_t u1,u2,u3;
+
+	if (!mp || !proc) return NULL;
+	dbus_error_init(&db_err);
+	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&u1,DBUS_TYPE_UINT32,&u2,DBUS_TYPE_UINT32,&u3,DBUS_TYPE_INVALID);
+	if (!dbus_error_is_set(&db_err)) ((MPGenericProc3u)(proc))(mp->sock,u1,u2,u3);
 	dbus_error_free(&db_err);
 	return NULL;
 }
@@ -426,9 +453,8 @@ static DBusMessage *mp_dbus_blink_or_beep(DBusConnection *conn, DBusMessage *msg
  *	[ mode     := 0 (normal) | 1 (nav) ]
  *	[ key      := key value to translate to (e.g. KEY_*) ]
  */ 
-static DBusMessage *mp_dbus_bind_key(DBusConnection *conn, DBusMessage *msg, void *data) {
+static DBusMessage *mp_dbus_bind_key(DBusMessage *msg, struct mp_state *mp, void *data) {
 	DBusError db_err; uint32_t scancode,mode,key;
-	struct mp_state *mp = (struct mp_state *)data;
 
 	if (!mp) return NULL;
 	dbus_error_init(&db_err);
@@ -457,28 +483,9 @@ static DBusMessage *mp_dbus_bind_key(DBusConnection *conn, DBusMessage *msg, voi
 	return NULL;
 }
 
-/* SyncClock() */
-static DBusMessage *mp_dbus_sync_clock(DBusConnection *conn, DBusMessage *msg, void *data) {
-	struct mp_state *mp = (struct mp_state *)data;
-
-	if (!mp) return NULL;
-	mp_set_clock(mp->sock);
-	return NULL;
-}
-
-/* ClearScreen() */
-static DBusMessage *mp_dbus_clear_screen(DBusConnection *conn, DBusMessage *msg, void *data) {
-	struct mp_state *mp = (struct mp_state *)data;
-
-	if (!mp) return NULL;
-	mp_lcd_clear(mp->sock);
-	return NULL; 
-}
-
 /* WriteText(text) Max Length: 144 */
-static DBusMessage *mp_dbus_write_text(DBusConnection *conn, DBusMessage *msg, void *data) {
+static DBusMessage *mp_dbus_write_text(DBusMessage *msg, struct mp_state *mp, void *data) {
 	DBusMessageIter db_args; char *text;
-	struct mp_state *mp = (struct mp_state *)data;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -492,9 +499,8 @@ static DBusMessage *mp_dbus_write_text(DBusConnection *conn, DBusMessage *msg, v
 }
 
 /* WriteLine(lineno, text) Max Length: 48 */
-static DBusMessage *mp_dbus_write_line(DBusConnection *conn, DBusMessage *msg, void *data) {
+static DBusMessage *mp_dbus_write_line(DBusMessage *msg, struct mp_state *mp, void *data) {
 	DBusMessageIter db_args; char *text; uint32_t lineno;
-	struct mp_state *mp = (struct mp_state *)data;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -513,9 +519,8 @@ static DBusMessage *mp_dbus_write_line(DBusConnection *conn, DBusMessage *msg, v
 }
 
 /* WriteBuffer(bufno, text) Max Length: 16 */
-static DBusMessage *mp_dbus_write_buffer(DBusConnection *conn, DBusMessage *msg, void *data) {
+static DBusMessage *mp_dbus_write_buffer(DBusMessage *msg, struct mp_state *mp, void *data) {
 	DBusMessageIter db_args; char *text; uint32_t bufno;
-	struct mp_state *mp = (struct mp_state *)data;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -534,9 +539,8 @@ static DBusMessage *mp_dbus_write_buffer(DBusConnection *conn, DBusMessage *msg,
 }
 
 /* WriteTextBin(chars) Max Length: 144 */
-static DBusMessage *mp_dbus_write_text_bin(DBusConnection *conn, DBusMessage *msg, void *data) {
-	DBusMessageIter db_args,db_sub; uint8_t val,i; char *chars;
-	struct mp_state *mp = (struct mp_state *)data;
+static DBusMessage *mp_dbus_write_text_bin(DBusMessage *msg, struct mp_state *mp, void *data) {
+	DBusMessageIter db_args,db_sub; uint32_t val,i; char *chars;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -549,6 +553,7 @@ static DBusMessage *mp_dbus_write_text_bin(DBusConnection *conn, DBusMessage *ms
 					if (dbus_message_iter_has_next(&db_sub)) dbus_message_iter_next(&db_sub);
 					else break;
 				} 
+
 				if (i > 0) mp_lcd_write_text(mp->sock,chars); 
 				g_free(chars);
 			}
@@ -559,9 +564,8 @@ static DBusMessage *mp_dbus_write_text_bin(DBusConnection *conn, DBusMessage *ms
 }
 
 /* WriteLineBin(lineno, chars) Max Length: 48 */
-static DBusMessage *mp_dbus_write_line_bin(DBusConnection *conn, DBusMessage *msg, void *data) {
-	DBusMessageIter db_args,db_sub; char *chars; uint32_t lineno; uint8_t val,i;
-	struct mp_state *mp = (struct mp_state *)data;
+static DBusMessage *mp_dbus_write_line_bin(DBusMessage *msg, struct mp_state *mp, void *data) {
+	DBusMessageIter db_args,db_sub; char *chars; uint32_t lineno,val,i;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -589,9 +593,8 @@ static DBusMessage *mp_dbus_write_line_bin(DBusConnection *conn, DBusMessage *ms
 }
 
 /* WriteBufferBin(lineno, chars) Max Length: 16 */
-static DBusMessage *mp_dbus_write_buffer_bin(DBusConnection *conn, DBusMessage *msg, void *data) {
-	DBusMessageIter db_args,db_sub; char *chars; uint32_t bufno; uint8_t val,i;
-	struct mp_state *mp = (struct mp_state *)data;
+static DBusMessage *mp_dbus_write_buffer_bin(DBusMessage *msg, struct mp_state *mp, void *data) {
+	DBusMessageIter db_args,db_sub; char *chars; uint32_t bufno,val,i;
 
 	if (!mp) return NULL;
 	if (dbus_message_iter_init(msg,&db_args)) {
@@ -618,21 +621,146 @@ static DBusMessage *mp_dbus_write_buffer_bin(DBusConnection *conn, DBusMessage *
 	return NULL;
 }
 
-static GDBusMethodTable mp_methods[] = {
-	{ "SetIndicator",   "uu",  "", mp_dbus_set_indicator,    G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "BlinkOrBeep",    "uu",  "", mp_dbus_blink_or_beep,    G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "BindKey",        "uuu", "", mp_dbus_bind_key,         G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "SyncClock",      "",    "", mp_dbus_sync_clock,       G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "ClearScreen",    "",    "", mp_dbus_clear_screen,     G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "WriteText",      "s",   "", mp_dbus_write_text,       G_DBUS_METHOD_FLAG_NOREPLY }, 
-	{ "WriteLine",      "us",  "", mp_dbus_write_line,       G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "WriteBuffer",    "us",  "", mp_dbus_write_buffer,     G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "WriteTextBin",   "ai",  "", mp_dbus_write_text_bin,   G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "WriteLineBin",   "uai", "", mp_dbus_write_line_bin,   G_DBUS_METHOD_FLAG_NOREPLY },
-	{ "WriteBufferBin", "uai", "", mp_dbus_write_buffer_bin, G_DBUS_METHOD_FLAG_NOREPLY }
+static MPDBusMethodTable mp_methods[] = {
+	{ "SetIndicator",   "uu",  "", mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_indicator },
+	{ "BlinkOrBeep",    "uu",  "", mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_blink_or_beep },
+	{ "SyncClock",      "",    "", mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_set_clock },
+	{ "ClearScreen",    "",    "", mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_clear },
+	{ "SetScreenMode",  "u",   "", mp_dbus_generic_1u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_screen_mode },
+	{ "SetDisplayMode", "uuu", "", mp_dbus_generic_3u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_display_mode },
+	{ "BindKey",        "uuu", "", mp_dbus_bind_key,          G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteText",      "s",   "", mp_dbus_write_text,        G_DBUS_METHOD_FLAG_NOREPLY, NULL }, 
+	{ "WriteLine",      "us",  "", mp_dbus_write_line,        G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteBuffer",    "us",  "", mp_dbus_write_buffer,      G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteTextBin",   "ai",  "", mp_dbus_write_text_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteLineBin",   "uai", "", mp_dbus_write_line_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteBufferBin", "uai", "", mp_dbus_write_buffer_bin,  G_DBUS_METHOD_FLAG_NOREPLY, NULL }
 };
 
-/**************** Initialization / Event Code *******************/
+static const char *introspect_ret = 
+"<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
+"        <node name=\"" MP_DBUS_PATH "\">\n"
+"          <interface name=\"" MP_DBUS_INTF "\">\n"
+"            <method name=\"SetIndicator\">\n"
+"              <!-- indicator: 1 (email) | 2 (IM) | 4 (Mute) | 8 (Alert)\n"
+"                   show:      0 (hide)  | 1 (solid) | 2 (blink) -->\n"
+"              <arg name=\"indicator\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"show\"      type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"BlinkOrBeep\">\n"
+"              <!-- beep_type: 0 (none) | 1 (low beep) | 2 (beep-beep) | 3 (short beep)\n"
+"                   blink:     0 (no)   | 1 (yes) -->\n"
+"              <arg name=\"beep_type\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"blink\"     type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"BindKey\">\n"
+"              <!-- scancode:  Mediapad scancode\n"
+"                   mode:      0 (normal) | 1 (nav)\n"
+"                   key:       key value to translate to (e.g. KEY_*) ] -->\n"
+"              <arg name=\"scancode\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"mode\"     type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"key\"      type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"SyncClock\" />\n"
+"            <method name=\"ClearScreen\" />\n"
+"            <method name=\"SetScreenMode\">\n"
+"              <!-- mode: 0 (clock) | 1 (text)\n -->\n"
+"              <arg name=\"mode\"      type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"SetDisplayMode\">\n"
+"              <!-- mode1: Mode for line1 (LCD_DISP_MODE_*)\n"
+"                   mode2: Mode for line2\n"
+"                   mode3: Mode for line3 -->\n"
+"              <arg name=\"mode1\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"mode2\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"mode3\" type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteText\">\n"
+"              <!-- Max Length: 144 -->\n"
+"              <arg name=\"text\" type=\"s\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteLine\">\n"
+"              <!-- Max Length: 48 -->\n"
+"              <arg name=\"lineno\" type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"text\"   type=\"s\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteBuffer\">\n"
+"              <!-- Max Length: 16 -->\n"
+"              <arg name=\"bufno\"  type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"text\"   type=\"s\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteTextBin\">\n"
+"              <!-- Max Length: 144 -->\n"
+"              <arg name=\"text\" type=\"ai\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteLineBin\">\n"
+"              <!-- Max Length: 48 -->\n"
+"              <arg name=\"lineno\" type=\"u\"  direction=\"in\"/>\n"
+"              <arg name=\"text\"   type=\"ai\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteBufferBin\">\n"
+"              <!-- Max Length: 16 -->\n"
+"              <arg name=\"bufno\"  type=\"u\"  direction=\"in\"/>\n"
+"              <arg name=\"text\"   type=\"ai\" direction=\"in\"/>\n"
+"           </method>\n"
+"         </interface>\n"
+"       </node>\n";
+
+/* Handle a DBus message */
+static DBusHandlerResult logitech_mediapad_msg(DBusConnection *conn, DBusMessage *msg, void *data) {
+	DBusMessage *db_msg_reply; MPDBusMethodTable *method;
+	struct mp_state *mp = (struct mp_state *)data;
+	char *interface = (char *)dbus_message_get_interface(msg);
+
+	/* Handle Introspection */
+	if (strlen(interface) == 35 && !strncmp(interface,"org.freedesktop.DBus.Introspectable",35)) {
+		if (!(db_msg_reply = dbus_message_new_method_return(msg)))
+			return DBUS_HANDLER_RESULT_NEED_MEMORY;
+		dbus_message_append_args(db_msg_reply, DBUS_TYPE_STRING, &introspect_ret, DBUS_TYPE_INVALID);
+		dbus_connection_send(conn,db_msg_reply,NULL);
+		dbus_message_unref(db_msg_reply);
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	if (!mp) {
+		error("logitech_mediapad_msg: mp is NULL!");
+		dbus_message_unref(msg);
+		dbus_connection_unref(conn);
+		return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+	}
+
+	/* Check for a method call */
+	for (method=mp_methods;method && method->name && method->function;method++) {
+		if (!dbus_message_is_method_call(msg,MP_DBUS_INTF,method->name)) continue;
+		if (!dbus_message_has_signature(msg,method->signature)) continue;
+
+		debug("logitech_mediapad: Calling DBus method: %s\n",method->name);
+		if (method->proc) db_msg_reply = method->function(msg,mp,method->proc);
+		else              db_msg_reply = method->function(msg,mp,NULL);
+
+		if (method->flags & G_DBUS_METHOD_FLAG_NOREPLY) {
+			if (db_msg_reply) dbus_message_unref(db_msg_reply);
+			db_msg_reply = dbus_message_new_method_return(msg);
+			dbus_connection_send(conn,db_msg_reply,NULL);
+			dbus_message_unref(db_msg_reply);
+			return DBUS_HANDLER_RESULT_HANDLED;
+		}
+
+		if (!db_msg_reply) return DBUS_HANDLER_RESULT_NEED_MEMORY;
+		dbus_connection_send(conn,db_msg_reply,NULL);
+		dbus_message_unref(db_msg_reply);
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+static const DBusObjectPathVTable mp_vtable = {
+	.message_function    = &logitech_mediapad_msg,
+	.unregister_function = NULL
+};
+
+/**************** UInput/fakehid Glue *******************/
 
 /**
  * Initialize the mediapad
@@ -647,7 +775,7 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 	if ((mp->uinput = open("/dev/input/uinput",O_WRONLY|O_NONBLOCK)) <= 0) {
 		if ((mp->uinput = open("/dev/uinput",O_WRONLY|O_NONBLOCK)) <= 0) {
 			if ((mp->uinput = open("/dev/misc/uinput",O_WRONLY|O_NONBLOCK)) <= 0) {
-				error("Error opening uinput device!");
+				error("logitech_mediapad: Error opening uinput device!");
 				g_free(mp);
 				return 1;
 			}
@@ -656,13 +784,13 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 
 	/* Setup the uinput device */
 	memset(&dev,0,sizeof(struct uinput_dev));
-	snprintf(dev.name,sizeof(dev.name),"Logitech DiNovo Mediapad");
+	snprintf(dev.name,sizeof(dev.name),"Logitech Mediapad");
 	dev.id.bustype = BUS_BLUETOOTH;
 	dev.id.vendor  = fake_hid->vendor;
 	dev.id.product = fake_hid->product;
 
 	if (write(mp->uinput,&dev,sizeof(struct uinput_dev)) != sizeof(struct uinput_dev)) {
-		error("Unable to create uinput device");
+		error("logitech_mediapad: Unable to create uinput device");
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
@@ -670,14 +798,14 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 
 	/* Enable events */
 	if (ioctl(mp->uinput,UI_SET_EVBIT,EV_KEY) < 0) {
-		error("Error enabling uinput key events");
+		error("logitech_mediapad: Error enabling uinput key events");
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
 	}
 
 	if (ioctl(mp->uinput,UI_SET_EVBIT,EV_SYN) < 0) {
-		error("Error enabling uinput syn events");
+		error("logitech_mediapad: Error enabling uinput syn events");
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
@@ -686,7 +814,7 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 	/* Enable keys */
 	for (i=0;i<KEY_UNKNOWN;i++) {
 		if (ioctl(mp->uinput,UI_SET_KEYBIT,i) < 0) {
-			error("Error enabling key #%d",i);
+			error("logitech_mediapad: Error enabling key #%d",i);
 			close(mp->uinput);
 			g_free(mp);
 			return 1;
@@ -695,7 +823,7 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 	
 	/* Create the uinput device */
 	if (ioctl(mp->uinput,UI_DEV_CREATE) < 0) {
-		error("Error creating uinput device");
+		error("logitech_mediapad: Error creating uinput device");
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
@@ -703,27 +831,29 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 
 	/* Get-on-D-Bus :P */
 	dbus_error_init(&db_err);
-	if (!(mp->db_conn = g_dbus_setup_bus(DBUS_BUS_SYSTEM,MP_DBUS_INTF,&db_err))) {
-		info("db_conn is NULL!\n");
-		if (dbus_error_is_set(&db_err)) 
-			info("db_err was set! (%s: %s)\n",db_err.name,db_err.message ? db_err.message : "Out of Memory?");
+	if (!(mp->db_conn = dbus_bus_get(DBUS_BUS_SYSTEM,&db_err))) {
+		error("logitech_mediapad: Unable to connect to DBus.");
 		dbus_error_free(&db_err);
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
-	} 
-	
-	dbus_connection_set_exit_on_disconnect(mp->db_conn,FALSE);
-	dbus_error_free(&db_err);
+	}
 
-	/* Register our interface */
-	if (!g_dbus_register_interface(mp->db_conn,MP_DBUS_PATH,MP_DBUS_INTF,mp_methods,NULL,NULL,mp,NULL)) {
-		error("Failed to register mediapad interface on path %s",MP_DBUS_PATH);
+	/* Request our interface */
+	dbus_connection_set_exit_on_disconnect(mp->db_conn,FALSE);
+	dbus_bus_request_name(mp->db_conn,MP_DBUS_INTF,DBUS_NAME_FLAG_REPLACE_EXISTING,&db_err);
+	if (dbus_error_is_set(&db_err)) {
+		error("logitech_mediapad: Failed to register mediapad interface on path %s",MP_DBUS_INTF);
 		dbus_connection_unref(mp->db_conn);
+		dbus_error_free(&db_err);
 		close(mp->uinput);
 		g_free(mp);
 		return 1;
 	}
+
+	/* Register our object path, and method table */
+	if (!dbus_connection_register_object_path(mp->db_conn,MP_DBUS_PATH,&mp_vtable,mp)) 
+			error("logitech_mediapad: Unable to register object path!");
 
 	/* Get the interrupt socket */
 	mp->sock           = g_io_channel_unix_get_fd(fake_input->io);
@@ -732,7 +862,7 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 
 	/* Set the mediapad clock */
 	mp_set_clock(mp->sock);
-	mp_lcd_set_mode(mp->sock,LCD_SCREEN_CLOCK);
+	mp_lcd_set_screen_mode(mp->sock,LCD_SCREEN_MODE_CLOCK);
 	return 0;
 }
 
@@ -753,9 +883,8 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 			return FALSE;
 		} 
 
-#if 0
-		info("dinovo: m %d: in: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);
-#endif
+		debug("dinovo: m %d: in: 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",
+			  mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);
 
 		/* Translate/Inject keypresses */
 		if (buf[1] == 0x03) { /* Media keys */
@@ -828,7 +957,7 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 		}
 	} else {
 		if (mp->db_conn) {
-			g_dbus_unregister_interface(mp->db_conn,MP_DBUS_PATH,MP_DBUS_INTF);
+			dbus_connection_unregister_object_path(mp->db_conn,MP_DBUS_INTF);
 			dbus_connection_unref(mp->db_conn); 
 		}
 		g_free(mp); 
