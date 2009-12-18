@@ -494,7 +494,7 @@ static hci_map commands_map[] = {
 	{ "Reserved",					160 },
 	{ "Reserved",					161 },
 	{ "Send Keypress Notification",			162 },
-	{ "IO Capabilities Response Negative Reply",	163 },
+	{ "IO Capability Request Negative Reply",	163 },
 	{ "Read Encryption Key Size",			164 },
 	{ "Reserved",					165 },
 	{ "Reserved",					166 },
@@ -532,9 +532,45 @@ static hci_map commands_map[] = {
 	{ "Read Best Effort Flush Timeout",		194 },
 	{ "Write Best Effort Flush Timeout",		195 },
 	{ "Short Range Mode",				196 },
-	{ "Reserved",					197 },
-	{ "Reserved",					198 },
-	{ "Reserved",					200 },
+	{ "Read LE Host Support",			197 },
+	{ "Write LE Host Support",			198 },
+	{ "Reserved",					199 },
+
+	{ "LE Set Event Mask",				200 },
+	{ "LE Read Buffer Size",			201 },
+	{ "LE Read Local Supported Features",		202 },
+	{ "Reserved",					203 },
+	{ "LE Set Random Address",			204 },
+	{ "LE Set Advertising Parameters",		205 },
+	{ "LE Read Advertising Channel TX Power",	206 },
+	{ "LE Set Advertising Data",			207 },
+
+	{ "LE Set Scan Response Data",			208 },
+	{ "LE Set Advertise Enable",			209 },
+	{ "LE Set Scan Parameters",			210 },
+	{ "LE Set Scan Enable",				211 },
+	{ "LE Create Connection",			212 },
+	{ "LE Create Connection Cancel",		213 },
+	{ "LE Read White List Size",			214 },
+	{ "LE Clear White List",			215 },
+
+	{ "LE Add Device To White List",		216 },
+	{ "LE Remove Device From White List",		217 },
+	{ "LE Connection Update",			218 },
+	{ "LE Set Host Channel Classification",		219 },
+	{ "LE Read Channel Map",			220 },
+	{ "LE Read Remote Used Features",		221 },
+	{ "LE Encrypt",					222 },
+	{ "LE Rand",					223 },
+
+	{ "LE Start Encryption",			224 },
+	{ "LE Long Term Key Request Reply",		225 },
+	{ "LE Long Term Key Request Negative Reply",	226 },
+	{ "LE Read Supported States",			227 },
+	{ "LE Receiver Test",				228 },
+	{ "LE Transmitter Test",			229 },
+	{ "LE Test End",				230 },
+	{ "Reserved",					231 },
 
 	{ NULL }
 };
@@ -594,6 +630,7 @@ static hci_map ver_map[] = {
 	{ "2.0",	0x03 },
 	{ "2.1",	0x04 },
 	{ "3.0",	0x05 },
+	{ "4.0",	0x06 },
 	{ NULL }
 };
 
@@ -666,8 +703,8 @@ static hci_map lmp_features_map[8][9] = {
 		{ "<no. 34>",		0x04		},	/* Bit 2 */
 		{ "<AFH cap. slave>",	LMP_AFH_CAP_SLV	},	/* Bit 3 */
 		{ "<AFH class. slave>",	LMP_AFH_CLS_SLV	},	/* Bit 4 */
-		{ "<no. 37>",		0x20		},	/* Bit 5 */
-		{ "<no. 38>",		0x40		},	/* Bit 6 */
+		{ "<BR/EDR not supp.>",	LMP_NO_BREDR	},	/* Bit 5 */
+		{ "<LE support>",	LMP_LE		},	/* Bit 6 */
 		{ "<3-slot EDR ACL>",	LMP_EDR_3SLOT	},	/* Bit 7 */
 		{ NULL }
 	},
@@ -684,7 +721,7 @@ static hci_map lmp_features_map[8][9] = {
 	},
 	{	/* Byte 6 */
 		{ "<extended inquiry>",	LMP_EXT_INQ	},	/* Bit 0 */
-		{ "<no. 49>",		0x02		},	/* Bit 1 */
+		{ "<LE and BR/EDR>",	LMP_LE_BREDR	},	/* Bit 1 */
 		{ "<no. 50>",		0x04		},	/* Bit 2 */
 		{ "<simple pairing>",	LMP_SIMPLE_PAIR	},	/* Bit 3 */
 		{ "<encapsulated PDU>",	LMP_ENCAPS_PDU	},	/* Bit 4 */
