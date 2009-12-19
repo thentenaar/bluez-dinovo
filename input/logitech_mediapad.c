@@ -458,7 +458,7 @@ static DBusMessage *mp_dbus_bind_key(DBusMessage *msg, struct mp_state *mp, void
 
 	if (!mp) return NULL;
 	dbus_error_init(&db_err);
-	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&scancode,DBUS_TYPE_UINT32,&mode,&key,DBUS_TYPE_UINT32,DBUS_TYPE_INVALID);
+	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&scancode,DBUS_TYPE_UINT32,&mode,DBUS_TYPE_UINT32,&key,DBUS_TYPE_INVALID);
 	if (dbus_error_is_set(&db_err)) error("logitech_mediapad: BindKey: unable to get args! (%s)",db_err.message);
 	else {
 		/* Media keys */
@@ -621,20 +621,40 @@ static DBusMessage *mp_dbus_write_buffer_bin(DBusMessage *msg, struct mp_state *
 	return NULL;
 }
 
+/* GetKeyBindings() */
+static DBusMessage *mp_dbus_get_key_bindings(DBusMessage *msg, struct mp_state *mp, void *data) {
+	DBusMessage *ret; uint8_t *ptr1,*ptr2,*ptr3,*ptr4;
+
+	if (!mp) return NULL;
+	if (!(ret = dbus_message_new_method_return(msg))) return NULL;
+
+	ptr1 = mp_keymap[0];   ptr2 = mp_keymap[1];
+	ptr3 = mp_keymap_m[0]; ptr4 = mp_keymap_m[1];
+	dbus_message_append_args(ret,
+		DBUS_TYPE_ARRAY,DBUS_TYPE_BYTE,&ptr1,16, /* Num mode keys */
+		DBUS_TYPE_ARRAY,DBUS_TYPE_BYTE,&ptr2,16, /* Nav mode keys */
+		DBUS_TYPE_ARRAY,DBUS_TYPE_BYTE,&ptr3,8,  /* Num mode media keys */
+		DBUS_TYPE_ARRAY,DBUS_TYPE_BYTE,&ptr4,8,  /* Nav mode media keys */
+		DBUS_TYPE_INVALID);
+
+	return ret;
+}
+
 static MPDBusMethodTable mp_methods[] = {
-	{ "SetIndicator",   "uu",  "", mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_indicator },
-	{ "BlinkOrBeep",    "uu",  "", mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_blink_or_beep },
-	{ "SyncClock",      "",    "", mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_set_clock },
-	{ "ClearScreen",    "",    "", mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_clear },
-	{ "SetScreenMode",  "u",   "", mp_dbus_generic_1u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_screen_mode },
-	{ "SetDisplayMode", "uuu", "", mp_dbus_generic_3u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_display_mode },
-	{ "BindKey",        "uuu", "", mp_dbus_bind_key,          G_DBUS_METHOD_FLAG_NOREPLY, NULL },
-	{ "WriteText",      "s",   "", mp_dbus_write_text,        G_DBUS_METHOD_FLAG_NOREPLY, NULL }, 
-	{ "WriteLine",      "us",  "", mp_dbus_write_line,        G_DBUS_METHOD_FLAG_NOREPLY, NULL },
-	{ "WriteBuffer",    "us",  "", mp_dbus_write_buffer,      G_DBUS_METHOD_FLAG_NOREPLY, NULL },
-	{ "WriteTextBin",   "ai",  "", mp_dbus_write_text_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
-	{ "WriteLineBin",   "uai", "", mp_dbus_write_line_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
-	{ "WriteBufferBin", "uai", "", mp_dbus_write_buffer_bin,  G_DBUS_METHOD_FLAG_NOREPLY, NULL }
+	{ "SetIndicator",   "uu",  "",          mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_indicator },
+	{ "BlinkOrBeep",    "uu",  "",          mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_blink_or_beep },
+	{ "SyncClock",      "",    "",          mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_set_clock },
+	{ "ClearScreen",    "",    "",          mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_clear },
+	{ "SetScreenMode",  "u",   "",          mp_dbus_generic_1u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_screen_mode },
+	{ "SetDisplayMode", "uuu", "",          mp_dbus_generic_3u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_display_mode },
+	{ "GetKeyBindings", "",    "ayayayay",  mp_dbus_get_key_bindings,  0,                          NULL },
+	{ "BindKey",        "uuu", "",          mp_dbus_bind_key,          G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteText",      "s",   "",          mp_dbus_write_text,        G_DBUS_METHOD_FLAG_NOREPLY, NULL }, 
+	{ "WriteLine",      "us",  "",          mp_dbus_write_line,        G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteBuffer",    "us",  "",          mp_dbus_write_buffer,      G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteTextBin",   "ai",  "",          mp_dbus_write_text_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteLineBin",   "uai", "",          mp_dbus_write_line_bin,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteBufferBin", "uai", "",          mp_dbus_write_buffer_bin,  G_DBUS_METHOD_FLAG_NOREPLY, NULL }
 };
 
 static const char *introspect_ret = 
@@ -661,10 +681,16 @@ static const char *introspect_ret =
 "              <arg name=\"mode\"     type=\"u\" direction=\"in\"/>\n"
 "              <arg name=\"key\"      type=\"u\" direction=\"in\"/>\n"
 "           </method>\n"
-"            <method name=\"SyncClock\" />\n"
-"            <method name=\"ClearScreen\" />\n"
-"            <method name=\"SetScreenMode\">\n"
-"              <!-- mode: 0 (clock) | 1 (text)\n -->\n"
+"           <method name=\"GetKeyBindings\">\n"
+"              <arg name=\"num_mode_keys\"       type=\"ay\" direction=\"out\"/>\n"
+"              <arg name=\"nav_mode_keys\"       type=\"ay\" direction=\"out\"/>\n"
+"              <arg name=\"num_mode_media_keys\" type=\"ay\" direction=\"out\"/>\n"
+"              <arg name=\"nav_mode_media_keys\" type=\"ay\" direction=\"out\"/>\n"
+"           </method>\n"
+"           <method name=\"SyncClock\" />\n"
+"           <method name=\"ClearScreen\" />\n"
+"           <method name=\"SetScreenMode\">\n"
+"              <!-- mode: 0 (clock) | 1 (text) -->\n"
 "              <arg name=\"mode\"      type=\"u\" direction=\"in\"/>\n"
 "           </method>\n"
 "            <method name=\"SetDisplayMode\">\n"
