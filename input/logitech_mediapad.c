@@ -3,10 +3,19 @@
  *     Licensed under the GNU General Public License (v2).                        *
  *     For more information, see http://hentenaar.com                             *
  *                                                                                *
+ *     12/19/09 thentenaar:                                                       *
+ *               * Added new DBus methods:                                        *
+ *                   * GetKeyBindings                                             *
+ *                   * WriteRawData                                               *
+ *                   * SetInputMode                                               *
+ *                                                                                *
+ *               * Added support for setting the input mode selector,             *
+ *                 and mode switch notification.                                  *
+ *               * The Numlock toggle command is now ignored.                     *
+ *                                                                                *
  *     12/17/09 thentenaar:                                                       *
  *               * Made simple DBus methods more generic.                         *
  *               * Added new DBus method: SetDisplayMode                          *
- *               * TODO: Add a DBus method to get the current keybindings.        *
  *                                                                                *
  *     12/16/09 thentenaar:                                                       *
  *               * Added new DBus methods: BindKey, SetScreenMode                 *
@@ -50,16 +59,16 @@
 #define LCD_DISP_MODE_SCROLL3 0x03 /* ... by 3 buffers */
 
 /* Icons */
-#define LCD_ICON_EMAIL	0x01
-#define LCD_ICON_IM		0x02
-#define LCD_ICON_MUTE	0x04
-#define LCD_ICON_ALERT	0x08
+#define LCD_ICON_EMAIL  0x01
+#define LCD_ICON_IM     0x02
+#define LCD_ICON_MUTE   0x04
+#define LCD_ICON_ALERT  0x08
 #define LCD_ICON_ALL    0x0f
 
 /* Icon states */
 #define LCD_ICON_OFF    0x00
-#define LCD_ICON_ON		0x01
-#define LCD_ICON_BLINK	0x02
+#define LCD_ICON_ON     0x01
+#define LCD_ICON_BLINK  0x02
 
 /* Speaker / LED */
 #define LCD_LOW_BEEP	0x01
@@ -68,27 +77,28 @@
 #define LCD_LED_ON      0x01
 #define LCD_LED_OFF     0x02
 
-/* Keypad Modes */
-#define MODE_NUM		0x00
-#define MODE_NAV		0x01
-
 /* DBus Paths */
 #define MP_DBUS_INTF	"com.hentenaar.Dinovo.MediaPad"
 #define MP_DBUS_PATH	"/com/hentenaar/Dinovo/MediaPad"
 
 /* Lengths */
-#define LCD_BUF_LEN		16
-#define LCD_LINE_LEN	(LCD_BUF_LEN*3)
+#define LCD_BUF_LEN     16
+#define LCD_LINE_LEN    (LCD_BUF_LEN*3)
 
 /* Media key scancodes */
 #define MP_KEY_MEDIA    0x83
-#define MP_KEY_FFWD		0xb5
-#define MP_KEY_REW		0xb6
-#define MP_KEY_STOP		0xb7
-#define MP_KEY_PLAY		0xcd
-#define MP_KEY_MUTE		0xe2
-#define MP_KEY_VOLUP	0xe9
-#define MP_KEY_VOLDOWN	0xea
+#define MP_KEY_FFWD     0xb5
+#define MP_KEY_REW      0xb6
+#define MP_KEY_STOP     0xb7
+#define MP_KEY_PLAY     0xcd
+#define MP_KEY_MUTE     0xe2
+#define MP_KEY_VOLUP    0xe9
+#define MP_KEY_VOLDOWN  0xea
+
+/* Media pad input mode constants */
+#define MP_INPUT_MODE_CALC 0x0b
+#define MP_INPUT_MODE_NAV  0x0c
+#define MP_INPUT_MODE_NUM  0x0d
 
 /* This is easier than including device.h, etc. */
 struct fake_input {
@@ -133,6 +143,14 @@ struct mpcmd screen_finish = { /* Signals the end of a screen write operation */
 
 struct mpcmd display_mode = { /* Set the display mode of a line */
 	{ 0xA2, 0x10, 0x00, 0x80, 0x12, 0x00, 0x00, 0x00 }, 8
+};
+
+struct mpcmd input_mode = { /* Set the input mode selector */
+	{ 0xA2, 0x01, 0x00 }, 3
+};
+
+struct mpcmd enable_mode_notification = { /* Enables mode switch notifications */
+	{ 0xA2, 0x10, 0x00, 0x80, 0x00, 0x51, 0x00, 0x00 }, 8
 };
 
 static struct mpcmd set_icons = { /* Set Icons (0 = off) */
@@ -254,6 +272,14 @@ static void write_mpcmd(int sock, struct mpcmd command) {
 static void mp_lcd_set_screen_mode(int sock, uint8_t mode) {
 	screen_mode.command[6] = (char)mode;
 	write_mpcmd(sock,screen_mode);
+}
+
+/**
+ * Set the input mode selector 
+ */
+static void mp_set_input_mode(int sock, uint8_t mode) {
+	input_mode.command[2] = (mode ? 0 : 1);
+	write_mpcmd(sock,input_mode);
 }
 
 /**
@@ -640,6 +666,44 @@ static DBusMessage *mp_dbus_get_key_bindings(DBusMessage *msg, struct mp_state *
 	return ret;
 }
 
+/* WriteRawData(data) */
+static DBusMessage *mp_dbus_write_raw_data(DBusMessage *msg, struct mp_state *mp, void *data) {
+	DBusMessageIter db_args,db_sub; uint32_t val,len=0; char *chars=NULL;
+
+	if (!mp) return NULL;
+	if (dbus_message_iter_init(msg,&db_args)) {
+		if (dbus_message_iter_get_arg_type(&db_args) == DBUS_TYPE_ARRAY) {
+			dbus_message_iter_recurse(&db_args,&db_sub);
+			chars = g_new0(char,1);
+			while (1) {
+				if ((chars = g_realloc(chars,sizeof(char)*(++len)))) {
+					dbus_message_iter_get_basic(&db_sub,&val);
+					chars[len-1] = (char)val;
+					if (dbus_message_iter_has_next(&db_sub)) dbus_message_iter_next(&db_sub);
+					else break;
+				} else return NULL;
+			}
+
+			if (len > 0) if (write(mp->sock,chars,len)) len++; 
+			g_free(chars);
+		}
+	}
+	
+	return NULL;
+}
+
+/* SetInputMode(mode) */
+static DBusMessage *mp_dbus_set_input_mode(DBusMessage *msg, struct mp_state *mp, void *proc) {
+	DBusError db_err; uint32_t u1;
+
+	if (!mp || !proc) return NULL;
+	dbus_error_init(&db_err);
+	dbus_message_get_args(msg,&db_err,DBUS_TYPE_UINT32,&u1,DBUS_TYPE_INVALID);
+	if (!dbus_error_is_set(&db_err)) mp_set_input_mode(mp->sock,(mp->mode = u1 ? 1 : 0));
+	dbus_error_free(&db_err);
+	return NULL;
+}
+
 static MPDBusMethodTable mp_methods[] = {
 	{ "SetIndicator",   "uu",  "",          mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_indicator },
 	{ "BlinkOrBeep",    "uu",  "",          mp_dbus_generic_2u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_blink_or_beep },
@@ -647,8 +711,10 @@ static MPDBusMethodTable mp_methods[] = {
 	{ "ClearScreen",    "",    "",          mp_dbus_generic_method,    G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_clear },
 	{ "SetScreenMode",  "u",   "",          mp_dbus_generic_1u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_screen_mode },
 	{ "SetDisplayMode", "uuu", "",          mp_dbus_generic_3u_method, G_DBUS_METHOD_FLAG_NOREPLY, mp_lcd_set_display_mode },
+	{ "SetInputMode",   "u",   "",          mp_dbus_set_input_mode,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
 	{ "GetKeyBindings", "",    "ayayayay",  mp_dbus_get_key_bindings,  0,                          NULL },
 	{ "BindKey",        "uuu", "",          mp_dbus_bind_key,          G_DBUS_METHOD_FLAG_NOREPLY, NULL },
+	{ "WriteRawData",   "ai",  "",          mp_dbus_write_raw_data,    G_DBUS_METHOD_FLAG_NOREPLY, NULL },
 	{ "WriteText",      "s",   "",          mp_dbus_write_text,        G_DBUS_METHOD_FLAG_NOREPLY, NULL }, 
 	{ "WriteLine",      "us",  "",          mp_dbus_write_line,        G_DBUS_METHOD_FLAG_NOREPLY, NULL },
 	{ "WriteBuffer",    "us",  "",          mp_dbus_write_buffer,      G_DBUS_METHOD_FLAG_NOREPLY, NULL },
@@ -691,7 +757,7 @@ static const char *introspect_ret =
 "           <method name=\"ClearScreen\" />\n"
 "           <method name=\"SetScreenMode\">\n"
 "              <!-- mode: 0 (clock) | 1 (text) -->\n"
-"              <arg name=\"mode\"      type=\"u\" direction=\"in\"/>\n"
+"              <arg name=\"mode\"  type=\"u\" direction=\"in\"/>\n"
 "           </method>\n"
 "            <method name=\"SetDisplayMode\">\n"
 "              <!-- mode1: Mode for line1 (LCD_DISP_MODE_*)\n"
@@ -700,6 +766,13 @@ static const char *introspect_ret =
 "              <arg name=\"mode1\" type=\"u\" direction=\"in\"/>\n"
 "              <arg name=\"mode2\" type=\"u\" direction=\"in\"/>\n"
 "              <arg name=\"mode3\" type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"           <method name=\"SetInputMode\">\n"
+"              <!-- mode: 0 (numeric) | 1 (non-numeric) -->\n"
+"              <arg name=\"mode\"  type=\"u\" direction=\"in\"/>\n"
+"           </method>\n"
+"            <method name=\"WriteRawData\">\n"
+"              <arg name=\"text\" type=\"ai\" direction=\"in\"/>\n"
 "           </method>\n"
 "            <method name=\"WriteText\">\n"
 "              <!-- Max Length: 144 -->\n"
@@ -886,9 +959,10 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
 	fake_hid->priv     = mp;
 	fake_input->uinput = mp->uinput;
 
-	/* Set the mediapad clock */
+	/* Set the mediapad clock, enable mode switch notifications. */
 	mp_set_clock(mp->sock);
 	mp_lcd_set_screen_mode(mp->sock,LCD_SCREEN_MODE_CLOCK);
+	write_mpcmd(mp->sock,enable_mode_notification);
 	return 0;
 }
 
@@ -896,13 +970,13 @@ int logitech_mediapad_setup_uinput(struct fake_input *fake_input, struct fake_hi
  * Handle an event from the mediapad
  */
 gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer data) {
-	int ln = 0, isk = 0; char buf[8]; 
+	int ln = 0, isk = 0; char buf[24], *cwtmp;
 	struct fake_input *fake_input = (struct fake_input *)data;
 	struct mp_state *mp = (struct mp_state *)(((struct fake_hid *)(fake_input->priv))->priv);
 	isk = g_io_channel_unix_get_fd(chan);
 
 	if (cond == G_IO_IN) {
-		memset(buf,0,8);
+		memset(buf,0,24);
 		if ((ln = read(isk, buf, sizeof(buf))) <= 0) { 
 			g_free(buf);
 			g_io_channel_unref(chan);
@@ -913,73 +987,71 @@ gboolean logitech_mediapad_event(GIOChannel *chan, GIOCondition cond, gpointer d
 			  mp->mode,buf[0],buf[1],buf[2],buf[3],buf[4],buf[5],buf[6],buf[7]);
 
 		/* Translate/Inject keypresses */
-		if (buf[1] == 0x03) { /* Media keys */
-			switch (buf[2] & 0xff) {
-				case 0x00: /* (Media) Key up event */
-					if (!mp->discard_keyup) {
-						if (mp->prev_key != 0) { inject_key(mp->uinput,mp->prev_key,0); mp->prev_key = 0; } 
-						mp->mode = 0;
-					} else mp->discard_keyup = 0; 
-				break;
-				case MP_KEY_MEDIA:
-					switch (buf[3]) {
-						case 0x01: /* Media key */
-							mp->prev_key = translate_key(mp->mode,MP_KEY_MEDIA);
-							inject_key(mp->uinput,mp->prev_key,1);
-						break;
-						case 0x02: /* Clear Screen key */
-							mp_lcd_clear(isk);
-							if (mp->icons & LCD_ICON_MUTE) { 
-								mp->icons = LCD_ICON_MUTE; 
-								mp_lcd_set_indicator(isk,LCD_ICON_MUTE,1); 
-							}
-						break;
-					}
-				break;
-				case MP_KEY_FFWD:
-				case MP_KEY_REW:
-				case MP_KEY_STOP:
-				case MP_KEY_PLAY:
-					mp->prev_key = translate_key(mp->mode,buf[2]);
-					inject_key(mp->uinput,mp->prev_key,1);
-				break;
-				break;
-				case MP_KEY_MUTE:
-					/* XXX: Is there some way to be notified if the audio is already muted on init? */
-					mp->prev_key = translate_key(mp->mode,MP_KEY_MUTE);
-					mp->icons   ^= LCD_ICON_MUTE; 
-					inject_key(mp->uinput,mp->prev_key,1);
-					mp_lcd_set_indicator(isk,LCD_ICON_MUTE,(mp->icons & LCD_ICON_MUTE) ? 1 : 0);
-				break;
-				case MP_KEY_VOLUP:
-				case MP_KEY_VOLDOWN:
-					mp->prev_key = translate_key(mp->mode,buf[2]);  
-					mp->icons   &= ~LCD_ICON_MUTE; 
-					inject_key(mp->uinput,mp->prev_key,1);
-					mp_lcd_set_indicator(isk,LCD_ICON_MUTE,0);
-				break;
-			}
-		} else if (buf[1] == 0x01 && buf[2] == 0x00) { /* Non-media keys */
-			/* NAV key */
-			if (buf[4] == 0x53 && buf[5] == 0x00) { 
-				mp->mode ^= 1; 
-				mp->prev_key = 0; 
-				mp->discard_keyup = 1;
+		if (buf[1] == 0x10 && buf[3] == 0x03) { /* Media keys */
+			if (buf[4] != 0x00 && (buf[4] & 0xff) <= MP_INPUT_MODE_NUM) {
+				/* Mode switch notification */
+				mp->prev_key = 0;
+				mp->mode     = (buf[4] == MP_INPUT_MODE_NAV) ? 1 : 0;
+				if (buf[4] != MP_INPUT_MODE_CALC) mp_set_input_mode(isk,mp->mode);
+				return TRUE;
 			} else {
-				/* (Non-media) Key up event */
-				if (buf[4] == 0x00 && buf[5] == 0x00 && mp->prev_key != 0) {
-					inject_key(mp->uinput,mp->prev_key,0);
-				} else if (buf[4] != 0x00) { /* Non-media key press */
-					mp->prev_key = translate_key(mp->mode,buf[4] & 0x7f); 
-					inject_key(mp->uinput,mp->prev_key,1); 
+				switch (buf[4] & 0xff) {
+					case 0x00: /* (Media) Key up event */
+						if (!mp->discard_keyup) {
+							if (mp->prev_key != 0) { 
+								inject_key(mp->uinput,mp->prev_key,0);
+								mp->prev_key = 0; 
+							}
+						} else mp->discard_keyup = 0; 
+					break;
+					case MP_KEY_MEDIA:
+						switch (buf[5]) {
+							case 0x01: /* Media key */
+								mp->prev_key = translate_key(mp->mode,MP_KEY_MEDIA);
+								inject_key(mp->uinput,mp->prev_key,1);
+							break;
+							case 0x02: /* Clear Screen key */
+								mp_lcd_clear(isk);
+								if (mp->icons & LCD_ICON_MUTE) { 
+									mp->icons = LCD_ICON_MUTE; 
+									mp_lcd_set_indicator(isk,LCD_ICON_MUTE,1); 
+								}
+							break;
+						}
+					break;
+					case MP_KEY_FFWD:
+					case MP_KEY_REW:
+					case MP_KEY_STOP:
+					case MP_KEY_PLAY:
+						mp->prev_key = translate_key(mp->mode,buf[4]);
+						inject_key(mp->uinput,mp->prev_key,1);
+					break;
+					case MP_KEY_MUTE:
+						mp->prev_key = translate_key(mp->mode,MP_KEY_MUTE);
+						mp->icons   ^= LCD_ICON_MUTE; 
+						inject_key(mp->uinput,mp->prev_key,1);
+						mp_lcd_set_indicator(isk,LCD_ICON_MUTE,(mp->icons & LCD_ICON_MUTE) ? 1 : 0);
+					break;
+					case MP_KEY_VOLUP:
+					case MP_KEY_VOLDOWN:
+						mp->prev_key = translate_key(mp->mode,buf[4]);  
+						mp->icons   &= ~LCD_ICON_MUTE; 
+						inject_key(mp->uinput,mp->prev_key,1);
+						mp_lcd_set_indicator(isk,LCD_ICON_MUTE,0);
+					break;
 				}
 			}
-		} else if (buf[1] == 0x11 && buf[2] == 0x0a) { 
+		} else if (buf[1] == 0x01 && buf[2] == 0x00) { /* Non-media keys */
+			/* (Non-media) Key up event */
+			if (buf[4] == 0x00 && buf[5] == 0x00 && mp->prev_key != 0) {
+				inject_key(mp->uinput,mp->prev_key,0);
+			} else if (buf[4] != 0x00) { /* Non-media key press */
+				mp->prev_key = translate_key(mp->mode,buf[4] & 0x7f); 
+				inject_key(mp->uinput,mp->prev_key,1); 
+			}
+		} else if (buf[1] == 0x11 && buf[3] == 0x0a) { 
 			/* Calculator Result */
-			/*
-			 cwtmp = &buf[4]; while (*cwtmp && *cwtmp == 0x20) cwtmp++;
-			 syslog(LOG_WARNING,"Got Calc result");
-			 */
+			debug("Got Calc result: %s",&buf[4]);
 		}
 	} else {
 		if (mp->db_conn) {
